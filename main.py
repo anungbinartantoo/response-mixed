@@ -28,6 +28,9 @@ canvas = None
 drawing_strokes = []  # List of DrawingStroke
 current_stroke = None  # Stroke yang sedang digambar
 
+current_target_index = 0
+visited_dot_indices = []
+
 grabbed_object = None
 
 # ─── Helpers ───────────────────────────────────────────────────
@@ -83,6 +86,59 @@ def draw_landmarks(frame, lm_list, w, h):
     for pt in pts:
         cv2.circle(frame, pt, 4, (0, 255, 200), -1)
 
+def get_number_7_dot_path(frame, dot_spacing=34):
+    rows = 6
+    cols = 4
+    height = (rows - 1) * dot_spacing
+    width = (cols - 1) * dot_spacing
+    ox = (frame.shape[1] - width) // 2
+    oy = (frame.shape[0] - height) // 2
+
+    path_keys = [
+        (0, 0), (1, 0), (2, 0), (3, 0),
+        (3, 1),
+        (2, 2),
+        (1, 3),
+        (0, 4),
+        (0, 5),
+    ]
+
+    path = []
+    for key in path_keys:
+        path.append((ox + key[0] * dot_spacing, oy + key[1] * dot_spacing))
+    return path
+
+
+def draw_dotted_number_7(frame, dot_positions, current_target_index, visited_indices, dot_radius=10):
+    """Gambar angka 7 dengan titik-titik di tengah."""
+    for idx, pt in enumerate(dot_positions):
+        if idx == current_target_index:
+            cv2.circle(frame, pt, dot_radius + 10, (252, 211, 77), -1)
+            cv2.circle(frame, pt, dot_radius + 4, (255, 255, 255), 2)
+        elif idx in visited_indices:
+            cv2.circle(frame, pt, dot_radius + 2, (52, 211, 153), -1)
+        else:
+            cv2.circle(frame, pt, dot_radius, (255, 255, 255), -1)
+
+
+def draw_number_7_path(frame, path_points, visited_indices, line_color=(0, 180, 255), thickness=8):
+    if len(visited_indices) > 1:
+        for i in range(1, len(visited_indices)):
+            a = path_points[visited_indices[i - 1]]
+            b = path_points[visited_indices[i]]
+            cv2.line(frame, a, b, line_color, thickness, cv2.LINE_AA)
+
+
+def nearest_dot_index(px, py, path_points, max_dist=30):
+    best = None
+    best_dist = max_dist
+    for i, pt in enumerate(path_points):
+        dist = math.hypot(px - pt[0], py - pt[1])
+        if dist < best_dist:
+            best_dist = dist
+            best = i
+    return best
+
 # ─── Main Loop ─────────────────────────────────────────────────
 cap = cv2.VideoCapture(0)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 960)
@@ -106,6 +162,7 @@ while True:
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
     detection_result = detector.detect(mp_image)
 
+    dot_positions = get_number_7_dot_path(frame, dot_spacing=40)
     all_landmarks = detection_result.hand_landmarks  # list of hands
     gesture_info = []
 
@@ -118,17 +175,11 @@ while True:
     if len(gesture_info) == 1:
         gesture, pos, lm_list = gesture_info[0]
         px, py = pos
+        dot_hit_idx = nearest_dot_index(px, py, dot_positions, max_dist=35)
 
-        if gesture == "DRAW":
-            if current_stroke is None:
-                current_stroke = DrawingStroke([(px, py)])
-            else:
-                current_stroke.points.append((px, py))
-        else:
-            # Simpan stroke jika selesai digambar
-            if current_stroke is not None and len(current_stroke.points) >= 2:
-                drawing_strokes.append(current_stroke)
-            current_stroke = None
+        if dot_hit_idx is not None and dot_hit_idx == current_target_index:
+            visited_dot_indices.append(dot_hit_idx)
+            current_target_index += 1
 
         if gesture == "PINCH":
             if grabbed_object is None:
@@ -164,6 +215,10 @@ while True:
     # ── Gabungkan canvas ─────────────────────────────────────
     frame = cv2.addWeighted(frame, 1.0, canvas, 0.7, 0)
 
+    # ── Gambar angka 5 dengan titik-titik di tengah ─────────────
+    draw_number_7_path(frame, dot_positions, visited_dot_indices)
+    draw_dotted_number_7(frame, dot_positions, current_target_index, visited_dot_indices, dot_radius=12)
+
     # ── Gambar garis yang sudah tersimpan ────────────────────
     for stroke in drawing_strokes:
         stroke.draw(frame)
@@ -174,8 +229,8 @@ while True:
 
     # ── HUD ──────────────────────────────────────────────────
     for i, (text, color) in enumerate([
-        ("Index finger = Draw",    (0, 200, 255)),
-        ("Thumb+Index = Move",     (0, 255, 150)),
+        ("Index finger = Connect dots",    (0, 200, 255)),
+        ("Thumb+Index = Move",             (0, 255, 150)),
     ]):
         cv2.putText(frame, text, (10, 25 + i * 22),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
@@ -192,6 +247,8 @@ while True:
         canvas = np.zeros_like(frame)
         drawing_strokes.clear()
         current_stroke = None
+        current_target_index = 0
+        visited_dot_indices.clear()
 
 cap.release()
 cv2.destroyAllWindows()
